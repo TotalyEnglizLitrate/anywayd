@@ -216,8 +216,8 @@ class ProcessManager:
         if not process:
             return False
 
-        process_db = await self.get_process_by_uuid(uuid, user)
-        if process_db is None:
+        process_db = await self.get_processes_by_uuid(uuid, user)
+        if not process_db:
             raise psutil.NoSuchProcess(
                 -1,
                 msg="Process not found, ensure it's managed by anywayd/started by you.",
@@ -238,18 +238,24 @@ class ProcessManager:
             print(f"Error killing process {uuid}: {e}")
             return False
 
-    async def get_process_by_uuid(self, uuid: UUID, user: str) -> Process | None:
+    async def get_processes_by_uuid(
+        self, uuid: set[UUID] | UUID, user: str
+    ) -> list[Process]:
+        if isinstance(uuid, UUID):
+            uuid = set((uuid,))
         async with self.async_session() as session:
-            process = (
-                await session.execute(
-                    select(Process).where(
-                        (Process.uuid == uuid) & (Process.invoked_by_user == user)
+            processes = (
+                (
+                    await session.execute(
+                        select(Process).where(
+                            (Process.uuid.in_(uuid)) & (Process.invoked_by_user == user)
+                        )
                     )
                 )
-            ).scalar_one_or_none()
-        if process is not None and self.is_same_process(process):
-            return process
-        return None
+                .scalars()
+                .all()
+            )
+        return [process for process in processes if self.is_same_process(process)]
 
     async def get_process_by_pid(self, pid: int, user: str) -> Process | None:
         async with self.async_session() as session:

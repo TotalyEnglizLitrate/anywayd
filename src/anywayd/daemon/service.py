@@ -8,6 +8,7 @@ from typing import Annotated, cast, final, override
 from datetime import datetime, UTC
 from uuid import UUID
 
+from dbus_fast import DBusError, Variant
 from dbus_fast.annotations import DBusBool, DBusSignature, DBusStr, DBusDict, DBusUInt32
 from dbus_fast.constants import BusType, MessageType, NameFlag, RequestNameReply
 from dbus_fast.service import ServiceInterface, dbus_method
@@ -114,7 +115,7 @@ class AnywaydService(ServiceInterface):
     @dbus_method()
     async def GetProcesses(
         self, uuids: Annotated[list[str], DBusSignature("as")]
-    ) -> DBusDict:
+    ) -> Annotated[list[DBusDict], DBusSignature("a{sv}")]:
         """
         Get information about processes.
 
@@ -124,7 +125,15 @@ class AnywaydService(ServiceInterface):
         Returns:
             Dictionary mapping UUID to process info
         """
-        raise NotImplementedError
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        procs = await self.process_manager.get_processes_by_uuid(
+            set(UUID(uuid) for uuid in uuids), user
+        )
+        return [
+            self._format_process(proc)
+            for proc in procs
+            if self.process_manager.is_same_process(proc)
+        ]
 
     @dbus_method()
     async def GetProcessByPID(self, pid: DBusUInt32) -> DBusDict:
@@ -137,7 +146,14 @@ class AnywaydService(ServiceInterface):
         Returns:
             Process information dictionary
         """
-        raise NotImplementedError
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        process = await self.process_manager.get_process_by_pid(pid, user)
+        if process is None:
+            raise DBusError(
+                "com.anywayd.Error.ProcessNotFound",
+                f"Process with {pid=} not found or not owned by {user=}"
+            )
+        return self._format_process(process)
 
     @dbus_method()
     async def ListAllProcesses(self, limit: DBusUInt32 = 100) -> DBusDict:
@@ -186,9 +202,25 @@ class AnywaydService(ServiceInterface):
         uid: int = cast(int, creds.body[0]["UnixUserID"].value)
         return pwd.getpwuid(uid)
 
-    def _format_process_status(self, status: Process) -> DBusDict:
+    def _format_process(self, proc: Process) -> DBusDict:
         """Format process status for D-Bus response."""
-        raise NotImplementedError
+        return {
+            "uuid": Variant("s", str(proc.uuid)),
+            "pid": Variant("x", proc.pid if proc.pid is not None else -1),
+            "command": Variant("s", proc.command),
+            "env": Variant("s", proc.env),
+            "cwd": Variant("s", proc.cwd),
+            "invoked_by_user": Variant("s", proc.invoked_by_user),
+            "run_as_user": Variant("s", proc.run_as_user),
+            "started_at": Variant("d", proc.started_at.timestamp()),
+            "ended_at": Variant(
+                "d", proc.ended_at.timestamp() if proc.ended_at is not None else -1.0
+            ),
+            "exit_code": Variant(
+                "x", proc.exit_code if proc.exit_code is not None else -1
+            ),
+            "boot_id": Variant("s", str(proc.boot_id)),
+        }
 
 
 async def service():

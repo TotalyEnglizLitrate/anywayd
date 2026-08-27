@@ -42,4 +42,4 @@ class Process(Base):
         DateTime(timezone=True), default=None
     )
     exit_code: Mapped[int | None] = mapped_column(default=None)
-    boot_id: Mapped[str] = mapped_column(String(36), default=get_boot_id)
+    boot_id: Mapped[UUID_py] = mapped_column(UUID, default=get_boot_id)

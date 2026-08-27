@@ -214,20 +214,17 @@ class ProcessManager:
     ) -> bool:
         process = self._processes.get(uuid)
         if not process:
-            return False
+            raise psutil.NoSuchProcess(-1)
 
         process_db = await self.get_processes_by_uuid(uuid, user)
         if not process_db:
-            raise psutil.NoSuchProcess(
-                -1,
-                msg="Process not found, ensure it's managed by anywayd/started by you.",
-            )
+            raise psutil.NoSuchProcess(-1)
 
         try:
             os.killpg(process.pid, signal_num)
             return True
         except ProcessLookupError:
-            return False
+            raise psutil.NoSuchProcess(-1)
         except PermissionError:
             try:
                 os.kill(process.pid, signal_num)

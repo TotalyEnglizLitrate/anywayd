@@ -14,6 +14,7 @@ from dbus_fast.constants import BusType, MessageType, NameFlag, RequestNameReply
 from dbus_fast.service import ServiceInterface, dbus_method
 from dbus_fast.aio.message_bus import MessageBus
 from dbus_fast.message import Message
+import psutil
 
 
 from anywayd.daemon.models import Process
@@ -107,10 +108,18 @@ class AnywaydService(ServiceInterface):
             signal_num: Signal to send (default: SIGTERM)
 
         Returns:
-            True if process was stopped, False if not found
+            True if process was stopped, Errors if process doesn't exist/not invoked by user
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
-        return await self.process_manager.kill(UUID(uuid), user, signal_num)
+        try:
+            ret = await self.process_manager.kill(UUID(uuid), user, signal_num)
+        except psutil.NoSuchProcess:
+            self.process_not_found(user, uuid=UUID(uuid))
+
+        if not ret:
+            raise DBusError("com.anywayd.KillFailed", f"Failed to kill process with {uuid=}")
+
+        return True
 
     @dbus_method()
     async def GetProcesses(
@@ -149,10 +158,7 @@ class AnywaydService(ServiceInterface):
         user = (await self.get_caller_info(curr_msg.get())).pw_name
         process = await self.process_manager.get_process_by_pid(pid, user)
         if process is None:
-            raise DBusError(
-                "com.anywayd.Error.ProcessNotFound",
-                f"Process with {pid=} not found or not owned by {user=}"
-            )
+            self.process_not_found(user, pid=pid)
         return self._format_process(process)
 
     @dbus_method()
@@ -221,6 +227,15 @@ class AnywaydService(ServiceInterface):
             ),
             "boot_id": Variant("s", str(proc.boot_id)),
         }
+
+    def process_not_found(self, user: str, pid: int | None = None, uuid: UUID | None = None):
+        if (pid, uuid) == (None, None):
+            raise ValueError("One of uuid, pid must be specified")
+        identifier = f"PID={pid}" if pid is not None else f"UUID={uuid}"
+        raise DBusError(
+            "com.anywayd.Error.ProcessNotFound",
+            f"Process with {identifier} not found or not owned by {user=}"
+        )
 
 
 async def service():

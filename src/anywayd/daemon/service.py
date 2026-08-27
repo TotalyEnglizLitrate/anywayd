@@ -18,8 +18,8 @@ import psutil
 
 
 from anywayd.daemon.models import Process
-
 from anywayd.daemon.process_manager import ProcessManager, process_manager
+from anywayd import __version__
 
 SERVICE_NAME = "com.anywayd.daemon"
 OBJECT_PATH = "/com/anywayd/daemon"
@@ -189,7 +189,7 @@ class AnywaydService(ServiceInterface):
     @dbus_method()
     async def GetVersion(self) -> DBusStr:
         """Get daemon version."""
-        return "0.1.0"
+        return __version__
 
     @dbus_method()
     async def GetCallerInfo(self) -> DBusUInt32:

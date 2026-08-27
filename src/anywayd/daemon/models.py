@@ -7,9 +7,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import DateTime, String, UUID
 
 
-def get_boot_id():
+def get_boot_id() -> UUID_py:
     with open("/proc/sys/kernel/random/boot_id") as f:
-        return f.read().strip()
+        return UUID_py(f.read().strip())
 
 
 def get_uid_gid(name: str) -> tuple[int, int]:

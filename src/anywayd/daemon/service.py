@@ -1,10 +1,12 @@
 import contextvars
 import os
 import pwd
+import shlex
 import signal
 
 from typing import Annotated, cast, final, override
 from datetime import datetime, UTC
+from uuid import UUID
 
 from dbus_fast.annotations import DBusBool, DBusSignature, DBusStr, DBusDict, DBusUInt32
 from dbus_fast.constants import BusType, MessageType, NameFlag, RequestNameReply
@@ -58,7 +60,6 @@ class AnywaydService(ServiceInterface):
         self,
         command: DBusStr,
         env: DBusDict,
-        shell: DBusStr,
         working_dir: DBusStr,
         run_as: DBusStr = "",
     ) -> DBusStr:
@@ -75,7 +76,23 @@ class AnywaydService(ServiceInterface):
         Returns:
             UUID of the started process
         """
-        raise NotImplementedError
+        if run_as:
+            try:
+                _ = pwd.getpwnam(run_as)
+            except KeyError:
+                run_as = ""
+
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        cmd = shlex.split(command)
+        return str(
+            await self.process_manager.spawn(
+                command=cmd,
+                invoked_by_user=user,
+                run_as_user=run_as or user,
+                env={k: cast(str, v.value) for (k, v) in env.items()},
+                cwd=working_dir,
+            )
+        )
 
     @dbus_method()
     async def StopProcess(
@@ -91,7 +108,8 @@ class AnywaydService(ServiceInterface):
         Returns:
             True if process was stopped, False if not found
         """
-        raise NotImplementedError
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        return await self.process_manager.kill(UUID(uuid), user, signal_num)
 
     @dbus_method()
     async def GetProcesses(
@@ -167,7 +185,6 @@ class AnywaydService(ServiceInterface):
 
         uid: int = cast(int, creds.body[0]["UnixUserID"].value)
         return pwd.getpwuid(uid)
-
 
     def _format_process_status(self, status: Process) -> DBusDict:
         """Format process status for D-Bus response."""

@@ -1,5 +1,4 @@
 import asyncio
-import contextvars
 import json
 import os
 import signal
@@ -36,12 +35,22 @@ class ProcessManager:
         async with self.async_session() as session:
             result = await session.execute(select(Process))
             for process in result.scalars().all():
-                if not self.is_same_process(process):
+                if self.is_same_process(process):
+                    process_ps = psutil.Process(process.pid)
+                    self._processes[process.uuid] = process_ps
+                    await self._monitor_process(process.uuid)
+                else:
                     to_mark_dead.add(process.uuid)
 
+        await self.mark_dead(to_mark_dead)
+
+    async def mark_dead(self, uuid: set[UUID] | UUID):
+        if isinstance(uuid, UUID):
+            uuid = set((uuid,))
+        async with self.async_session() as session:
             _ = await session.execute(
                 update(Process)
-                .where(Process.uuid.in_(to_mark_dead) & Process.pid.is_not(None))
+                .where(Process.uuid.in_(uuid) & (Process.pid.is_not(None)))
                 .values(pid=None)
             )
             await session.commit()
@@ -198,11 +207,21 @@ class ProcessManager:
         finally:
             _ = self._processes.pop(uuid, None)
             _ = self._process_tasks.pop(uuid, None)
+            await self.mark_dead(uuid)
 
-    async def kill(self, uuid: UUID, signal_num: int = signal.SIGTERM) -> bool:
+    async def kill(
+        self, uuid: UUID, user: str, signal_num: int = signal.SIGTERM
+    ) -> bool:
         process = self._processes.get(uuid)
         if not process:
             return False
+
+        process_db = await self.get_process_by_uuid(uuid, user)
+        if process_db is None:
+            raise psutil.NoSuchProcess(
+                -1,
+                msg="Process not found, ensure it's managed by anywayd/started by you.",
+            )
 
         try:
             os.killpg(process.pid, signal_num)
@@ -219,18 +238,26 @@ class ProcessManager:
             print(f"Error killing process {uuid}: {e}")
             return False
 
-    async def get_process_by_uuid(self, uuid: UUID) -> Process | None:
+    async def get_process_by_uuid(self, uuid: UUID, user: str) -> Process | None:
         async with self.async_session() as session:
             process = (
-                await session.execute(select(Process).where(Process.uuid == uuid))
+                await session.execute(
+                    select(Process).where(
+                        (Process.uuid == uuid) & (Process.invoked_by_user == user)
+                    )
+                )
             ).scalar_one_or_none()
         if process is not None and self.is_same_process(process):
             return process
         return None
 
-    async def get_process_by_pid(self, pid: int) -> Process | None:
+    async def get_process_by_pid(self, pid: int, user: str) -> Process | None:
         async with self.async_session() as session:
-            result = await session.execute(select(Process).where(Process.pid == pid))
+            result = await session.execute(
+                select(Process).where(
+                    (Process.pid == pid) & (Process.invoked_by_user == user)
+                )
+            )
             candidates = result.scalars().all()
 
         for process in candidates:
@@ -312,25 +339,6 @@ class ProcessManager:
             "total_processes": await self.count_processes(user),
             "running_processes": await self.count_processes(user, running_only=True),
         }
-
-    async def wait_for_process(
-        self, uuid: UUID, timeout: float | None = None
-    ) -> int | None:
-        process = self._processes.get(uuid)
-        if not process:
-            process = await self.get_process_by_uuid(uuid)
-            if process and process.exit_code is not None:
-                return process.exit_code
-            return None
-
-        try:
-            if timeout:
-                exit_code = await asyncio.to_thread(process.wait, timeout)
-            else:
-                exit_code = await asyncio.to_thread(process.wait)
-            return exit_code
-        except psutil.TimeoutExpired:
-            return None
 
     async def close(self):
         await self.engine.dispose()

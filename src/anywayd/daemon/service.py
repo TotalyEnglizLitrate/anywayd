@@ -131,7 +131,7 @@ class AnywaydService(ServiceInterface):
         Get information about processes.
 
         Args:
-            uuids: List of process UUIDs (empty list returns all)
+            uuids: List of process UUIDs
 
         Returns:
             List of Dicts representing a managed Process

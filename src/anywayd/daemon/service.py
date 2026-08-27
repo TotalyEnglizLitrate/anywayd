@@ -121,7 +121,7 @@ class AnywaydService(ServiceInterface):
     @dbus_method()
     async def GetProcesses(
         self, uuids: Annotated[list[str], DBusSignature("as")]
-    ) -> Annotated[list[DBusDict], DBusSignature("a{sv}")]:
+    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
         """
         Get information about processes.
 
@@ -135,7 +135,7 @@ class AnywaydService(ServiceInterface):
         procs = await self.process_manager.get_processes_by_uuid(
             set(UUID(uuid) for uuid in uuids), user
         )
-        return [self._format_process(proc) for proc in procs]
+        return {str(proc.uuid): self._format_process(proc) for proc in procs}
 
     @dbus_method()
     async def GetProcessByPID(self, pid: DBusUInt32) -> DBusDict:
@@ -155,7 +155,7 @@ class AnywaydService(ServiceInterface):
         return self._format_process(process)
 
     @dbus_method()
-    async def GetProcessesByUser(self, limit: DBusUInt32 = 100) -> Annotated[list[DBusDict], DBusSignature("a{sv}")]:
+    async def GetProcessesByUser(self, limit: DBusUInt32 = 100) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
         """
         List all tracked processes.
 
@@ -167,7 +167,7 @@ class AnywaydService(ServiceInterface):
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
         procs = await self.process_manager.get_process_by_user(user, limit)
-        return [self._format_process(proc) for proc in procs]
+        return {str(proc.uuid): self._format_process(proc) for proc in procs}
 
 
     @dbus_method()

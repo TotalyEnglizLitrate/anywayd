@@ -17,7 +17,7 @@ from anywayd.daemon.process_manager import ProcessManager
 
 SERVICE_NAME = "com.anywayd.daemon"
 OBJECT_PATH = "/com/anywayd/daemon"
-
+DB_URL = "sqlite+aiosqlite:///var/lib/anywayd/anywayd.db"
 
 @final
 class AnywaydService(ServiceInterface):
@@ -146,13 +146,9 @@ class AnywaydService(ServiceInterface):
         raise NotImplementedError
 
 
-async def main():
+async def service():
     """Main entry point for the D-Bus service."""
-    database_url = os.environ.get(
-        "ANYWAYD_DATABASE_URL", "sqlite+aiosqlite:///var/lib/anywayd/anywayd.db"
-    )
-
-    process_manager = ProcessManager(database_url)
+    process_manager = ProcessManager(DB_URL)
     await process_manager.initialize()
     bus = await MessageBus().connect()
     service = AnywaydService(process_manager)
@@ -165,7 +161,7 @@ async def main():
         raise RuntimeError(f"Unable to acquire {SERVICE_NAME=}, name already in use.")
 
     print(f"Anywayd D-Bus service running on {OBJECT_PATH}")
-    print(f"Database: {database_url}")
+    print(f"Database: {DB_URL}")
     print(f"PID: {os.getpid()}")
 
     try:
@@ -175,7 +171,3 @@ async def main():
     finally:
         await process_manager.close()
         print("Shutdown complete")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

@@ -117,7 +117,9 @@ class AnywaydService(ServiceInterface):
             self.process_not_found(user, uuid=UUID(uuid))
 
         if not ret:
-            raise DBusError("com.anywayd.KillFailed", f"Failed to kill process with {uuid=}")
+            raise DBusError(
+                "com.anywayd.KillFailed", f"Failed to kill process with {uuid=}"
+            )
 
         return True
 
@@ -132,17 +134,13 @@ class AnywaydService(ServiceInterface):
             uuids: List of process UUIDs (empty list returns all)
 
         Returns:
-            Dictionary mapping UUID to process info
+            List of Dicts representing a managed Process
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
         procs = await self.process_manager.get_processes_by_uuid(
             set(UUID(uuid) for uuid in uuids), user
         )
-        return [
-            self._format_process(proc)
-            for proc in procs
-            if self.process_manager.is_same_process(proc)
-        ]
+        return [self._format_process(proc) for proc in procs]
 
     @dbus_method()
     async def GetProcessByPID(self, pid: DBusUInt32) -> DBusDict:
@@ -162,7 +160,7 @@ class AnywaydService(ServiceInterface):
         return self._format_process(process)
 
     @dbus_method()
-    async def ListAllProcesses(self, limit: DBusUInt32 = 100) -> DBusDict:
+    async def GetProcessesByUser(self, limit: DBusUInt32 = 100) -> Annotated[list[DBusDict], DBusSignature("a{sv}")]:
         """
         List all tracked processes.
 
@@ -170,9 +168,23 @@ class AnywaydService(ServiceInterface):
             limit: Maximum number of processes to return
 
         Returns:
-            Dictionary mapping UUID to process info
+            List of Dicts representing managed Processes
         """
-        raise NotImplementedError
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        procs = await self.process_manager.get_process_by_user(user, limit)
+        return [self._format_process(proc) for proc in procs]
+
+
+    @dbus_method()
+    async def GetStats(self) -> DBusDict:
+        """
+        List Process stats concerning calling user
+        """
+        user = (await self.get_caller_info(curr_msg.get())).pw_name
+        return {
+            k: Variant("x", v)
+            for (k, v) in (await self.process_manager.get_stats(user)).items()
+        }
 
     @dbus_method()
     async def GetVersion(self) -> DBusStr:
@@ -228,13 +240,15 @@ class AnywaydService(ServiceInterface):
             "boot_id": Variant("s", str(proc.boot_id)),
         }
 
-    def process_not_found(self, user: str, pid: int | None = None, uuid: UUID | None = None):
+    def process_not_found(
+        self, user: str, pid: int | None = None, uuid: UUID | None = None
+    ):
         if (pid, uuid) == (None, None):
             raise ValueError("One of uuid, pid must be specified")
         identifier = f"PID={pid}" if pid is not None else f"UUID={uuid}"
         raise DBusError(
             "com.anywayd.Error.ProcessNotFound",
-            f"Process with {identifier} not found or not owned by {user=}"
+            f"Process with {identifier} not found or not owned by {user=}",
         )
 
 

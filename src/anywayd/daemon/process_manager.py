@@ -254,6 +254,23 @@ class ProcessManager:
             )
         return [process for process in processes if self.is_same_process(process)]
 
+    async def get_process_by_user(self, user: str, limit: int) -> list[Process]:
+        async with self.async_session() as session:
+            processes = (
+                (
+                    await session.execute(
+                        select(Process)
+                        .where(Process.invoked_by_user == user)
+                        .order_by(Process.started_at)
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        return [process for process in processes if self.is_same_process(process)]
+
     async def get_process_by_pid(self, pid: int, user: str) -> Process | None:
         async with self.async_session() as session:
             result = await session.execute(
@@ -317,6 +334,8 @@ class ProcessManager:
         for uuid in finished_uuids:
             _ = self._processes.pop(uuid, None)
             _ = self._process_tasks.pop(uuid, None)
+
+        await self.mark_dead(set(finished_uuids))
 
     async def cleanup_orphaned(self):
         async with self.async_session() as session:

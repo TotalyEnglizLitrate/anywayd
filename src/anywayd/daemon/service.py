@@ -53,11 +53,6 @@ class AnywaydService(ServiceInterface):
         self._start_time = datetime.now(UTC)
 
     @dbus_method()
-    async def Echo(self, what: DBusStr) -> DBusStr:
-        """Echo back the input - simple test method"""
-        return what
-
-    @dbus_method()
     async def StartProcess(
         self,
         command: DBusStr,

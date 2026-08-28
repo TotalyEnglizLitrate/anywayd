@@ -88,10 +88,18 @@
       pkgs = nixpkgs.legacyPackages.${system};
       inherit (pkgs.callPackages pyproject-nix.build.util {}) mkApplication;
     in {
-      default = mkApplication {
-        venv = pythonSet.mkVirtualEnv "anywayd" workspace.deps.default;
-        package = pythonSet.anywayd;
-      };
+      default =
+        (mkApplication {
+          venv = pythonSet.mkVirtualEnv "anywayd" workspace.deps.default;
+          package = pythonSet.anywayd;
+        }).overrideAttrs (old: {
+          postInstall =
+            (old.postInstall or "")
+            + ''
+              install -Dm644 ${./com.anywayd.daemon.conf} \
+                $out/share/dbus-1/system.d/com.anywayd.daemon.conf
+            '';
+        });
     });
   };
 }

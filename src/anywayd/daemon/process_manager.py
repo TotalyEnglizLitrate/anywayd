@@ -41,7 +41,7 @@ class ProcessManager:
             rows = result.scalars().all()
             log.debug("Found %d process record(s) from previous run", len(rows))
             for process in rows:
-                if await self.is_same_process(process):
+                if process.pid is not None and await self.is_same_process(process):
                     log.info(
                         "Reattaching to still-running process %s (pid=%s)",
                         process.uuid,

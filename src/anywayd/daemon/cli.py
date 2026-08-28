@@ -13,7 +13,7 @@ from anywayd.daemon.service import service
 
 
 def _ensure_gil() -> None:
-    if hasattr(sys, "_is_gil_enabled"):
+    if hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled():
         raise RuntimeError("anywayd does not support free-threaded Python builds")
 
 

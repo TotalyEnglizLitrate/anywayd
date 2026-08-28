@@ -176,7 +176,7 @@ class AnywaydService(ServiceInterface):
             List of Dicts representing a managed Process
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
-        log.debug("GetProcesses requested by %s: %s", user, uuids)
+        log.info("GetProcesses requested by %s: %s", user, uuids)
         procs = await self.process_manager.get_processes_by_uuid(
             set(UUID(uuid) for uuid in uuids), user
         )
@@ -194,7 +194,7 @@ class AnywaydService(ServiceInterface):
             Process information dictionary
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
-        log.debug("GetProcessByPID requested by %s: pid=%s", user, pid)
+        log.info("GetProcessByPID requested by %s: pid=%s", user, pid)
         process = await self.process_manager.get_process_by_pid(pid, user)
         if process is None:
             log.error("GetProcessByPID: pid=%s not found for user %s", pid, user)
@@ -215,7 +215,7 @@ class AnywaydService(ServiceInterface):
             List of Dicts representing managed Processes
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
-        log.debug("GetProcessesByUser requested by %s: limit=%s", user, limit)
+        log.info("GetProcessesByUser requested by %s: limit=%s", user, limit)
         procs = await self.process_manager.get_process_by_user(user, limit)
         return {str(proc.uuid): self._format_process(proc) for proc in procs}
 
@@ -225,7 +225,7 @@ class AnywaydService(ServiceInterface):
         List Process stats concerning calling user
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
-        log.debug("GetStats requested by %s", user)
+        log.info("GetStats requested by %s", user)
         return {
             k: Variant("x", v)
             for (k, v) in (await self.process_manager.get_stats(user)).items()
@@ -335,8 +335,5 @@ async def service():
 
         try:
             await bus.wait_for_disconnect()
-        except:
-            log.exception("Fatal error, shutting down")
-            raise
         finally:
             log.info("Shutdown complete")

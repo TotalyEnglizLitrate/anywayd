@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 
 from anywayd.daemon.models import Base, Process, get_uid_gid
 
+log = logging.getLogger("anywayd")
+
 
 @final
 class ProcessManager:
@@ -28,14 +31,22 @@ class ProcessManager:
         self._process_tasks: dict[UUID, asyncio.Task[None]] = {}
 
     async def initialize(self):
+        log.debug("Initializing process manager, creating tables if needed")
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
         to_mark_dead: set[UUID] = set()
         async with self.async_session() as session:
             result = await session.execute(select(Process))
-            for process in result.scalars().all():
+            rows = result.scalars().all()
+            log.debug("Found %d process record(s) from previous run", len(rows))
+            for process in rows:
                 if await self.is_same_process(process):
+                    log.info(
+                        "Reattaching to still-running process %s (pid=%s)",
+                        process.uuid,
+                        process.pid,
+                    )
                     process_ps = psutil.Process(process.pid)
                     self._processes[process.uuid] = process_ps
                     task = asyncio.create_task(self._monitor_process(process.uuid))
@@ -43,11 +54,15 @@ class ProcessManager:
                 else:
                     to_mark_dead.add(process.uuid)
 
+        if to_mark_dead:
+            log.info("Marking %d stale process record(s) as dead", len(to_mark_dead))
         await self.mark_dead(to_mark_dead)
 
     async def mark_dead(self, uuid: set[UUID] | UUID):
         if isinstance(uuid, UUID):
             uuid = set((uuid,))
+        if not uuid:
+            return
         async with self.async_session() as session:
             _ = await session.execute(
                 update(Process)
@@ -55,6 +70,7 @@ class ProcessManager:
                 .values(pid=None)
             )
             await session.commit()
+        log.debug("Marked dead: %s", uuid)
 
     async def is_same_process(self, process_db: Process):
         if process_db.pid is not None and psutil.pid_exists(process_db.pid):
@@ -63,6 +79,11 @@ class ProcessManager:
                 process_db.started_at
                 - datetime.fromtimestamp(curr_process.create_time(), tz=UTC)
             ) > timedelta(seconds=1.0):
+                log.debug(
+                    "PID %s reused by a different process than uuid=%s (create_time mismatch)",
+                    process_db.pid,
+                    process_db.uuid,
+                )
                 return False
 
             return True
@@ -90,6 +111,7 @@ class ProcessManager:
             session.add(process)
             await session.commit()
             await session.refresh(process)
+        log.debug("Recorded new process row uuid=%s command=%r", process.uuid, command)
         return process.uuid
 
     async def update_process_pid(self, uuid: UUID, pid: int):
@@ -99,6 +121,9 @@ class ProcessManager:
             if process:
                 process.pid = pid
                 await session.commit()
+                log.debug("Updated uuid=%s with pid=%s", uuid, pid)
+            else:
+                log.warning("update_process_pid: no row found for uuid=%s", uuid)
 
     async def _log_process_end(self, uuid: UUID, exit_code: int):
         async with self.async_session() as session:
@@ -108,6 +133,9 @@ class ProcessManager:
                 process.ended_at = datetime.now(UTC)
                 process.exit_code = exit_code
                 await session.commit()
+                log.info("Process %s exited with code %s", uuid, exit_code)
+            else:
+                log.warning("_log_process_end: no row found for uuid=%s", uuid)
 
     async def spawn(
         self,
@@ -156,6 +184,12 @@ class ProcessManager:
                 *command,
             ]
         else:
+            log.info(
+                "Cross-user spawn: %s -> %s via pkexec (uuid=%s)",
+                invoked_by_user,
+                run_as_user,
+                process_uuid,
+            )
             dropper_cmd = [
                 sys.executable,
                 privdrop,
@@ -178,26 +212,39 @@ class ProcessManager:
                 *command,
             ]
 
-        process = await asyncio.create_subprocess_exec(
-            *dropper_cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            stdin=asyncio.subprocess.DEVNULL,
-            cwd=cwd,
-            env=env,
-            start_new_session=True,
-        )
+        log.debug("Launching dropper: %s", dropper_cmd)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *dropper_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+            )
+        except Exception:
+            log.exception("Failed to launch process for uuid=%s", process_uuid)
+            raise
 
         await self.update_process_pid(process_uuid, process.pid)
         self._processes[process_uuid] = process
         task = asyncio.create_task(self._monitor_process(process_uuid))
         self._process_tasks[process_uuid] = task
 
+        log.info(
+            "Spawned uuid=%s pid=%s as %s (invoked by %s)",
+            process_uuid,
+            process.pid,
+            run_as_user,
+            invoked_by_user,
+        )
         return process_uuid
 
     async def _monitor_process(self, uuid: UUID):
         process = self._processes.get(uuid)
         if not process:
+            log.warning("_monitor_process: uuid=%s not tracked, nothing to monitor", uuid)
             return
 
         if isinstance(process, psutil.Process):
@@ -208,8 +255,8 @@ class ProcessManager:
         try:
             exit_code = await wait_fut
             await self._log_process_end(uuid, exit_code)
-        except Exception as e:
-            print(f"Error monitoring process {uuid}: {e}")
+        except Exception:
+            log.exception("Error monitoring process %s", uuid)
         finally:
             _ = self._processes.pop(uuid, None)
             _ = self._process_tasks.pop(uuid, None)
@@ -220,25 +267,31 @@ class ProcessManager:
     ) -> bool:
         process = self._processes.get(uuid)
         if not process:
+            log.warning("kill: uuid=%s not tracked", uuid)
             raise psutil.NoSuchProcess(-1)
 
         process_db = await self.get_processes_by_uuid(uuid, user)
         if not process_db:
+            log.warning("kill: uuid=%s not owned by %s or not found", uuid, user)
             raise psutil.NoSuchProcess(-1)
 
+        log.info("Killing uuid=%s pid=%s with signal=%s (by %s)", uuid, process.pid, signal_num, user)
         try:
             os.killpg(process.pid, signal_num)
             return True
         except ProcessLookupError:
+            log.warning("kill: process group for pid=%s already gone", process.pid)
             raise psutil.NoSuchProcess(-1)
         except PermissionError:
+            log.debug("killpg denied for pid=%s, falling back to kill()", process.pid)
             try:
                 os.kill(process.pid, signal_num)
                 return True
             except (ProcessLookupError, PermissionError):
+                log.warning("kill: fallback kill() failed for pid=%s", process.pid)
                 return False
-        except Exception as e:
-            print(f"Error killing process {uuid}: {e}")
+        except Exception:
+            log.exception("Error killing process %s", uuid)
             return False
 
     async def get_processes_by_uuid(
@@ -341,6 +394,8 @@ class ProcessManager:
             _ = self._processes.pop(uuid, None)
             _ = self._process_tasks.pop(uuid, None)
 
+        if finished_uuids:
+            log.debug("cleanup_finished: reaping %d task(s)", len(finished_uuids))
         await self.mark_dead(set(finished_uuids))
 
     async def cleanup_orphaned(self):
@@ -356,6 +411,11 @@ class ProcessManager:
                         await asyncio.to_thread(os.kill, process.pid, 0)
                         continue
                     except (ProcessLookupError, PermissionError):
+                        log.info(
+                            "cleanup_orphaned: marking uuid=%s (pid=%s) as ended, process is gone",
+                            process.uuid,
+                            process.pid,
+                        )
                         process.ended_at = datetime.now(UTC)
                         process.exit_code = -1
                         await session.commit()
@@ -369,6 +429,7 @@ class ProcessManager:
         }
 
     async def close(self):
+        log.debug("Closing process manager, disposing engine")
         await self.engine.dispose()
 
 

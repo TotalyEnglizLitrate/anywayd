@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import logging
 import os
 import pwd
 import shlex
@@ -30,6 +31,27 @@ DB_PATH = "/var/lib/anywayd/anywayd.db"
 DB_DIR = "/var/lib/anywayd"
 
 curr_msg: contextvars.ContextVar[Message] = contextvars.ContextVar("message")
+
+log = logging.getLogger("anywayd")
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    if logging.getLogger().handlers:
+        return
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[
+            RichHandler(
+                console=Console(),
+                rich_tracebacks=True,
+                show_path=False,
+                markup=True,
+            )
+        ],
+    )
 
 
 class AnywaydMessageBus(MessageBus):
@@ -80,19 +102,32 @@ class AnywaydService(ServiceInterface):
             try:
                 _ = pwd.getpwnam(run_as)
             except KeyError:
-                run_as = ""
+                log.error("Unknown run_as user %r, falling back to caller", run_as)
+                raise
 
         user = (await self.get_caller_info(curr_msg.get())).pw_name
         cmd = shlex.split(command)
-        return str(
-            await self.process_manager.spawn(
+        log.info(
+            "StartProcess requested by [bold]%s[/] as [bold]%s[/]: %r (cwd=%r)",
+            user,
+            run_as or user,
+            cmd,
+            working_dir,
+        )
+        try:
+            uuid = await self.process_manager.spawn(
                 command=cmd,
                 invoked_by_user=user,
                 run_as_user=run_as or user,
                 env={k: cast(str, v.value) for (k, v) in env.items()},
                 cwd=working_dir,
             )
-        )
+        except Exception:
+            log.exception("Failed to spawn process %r for user %s", cmd, user)
+            raise
+
+        log.info("Started process [bold]%s[/] (%s)", uuid, cmd[0] if cmd else "")
+        return str(uuid)
 
     @dbus_method()
     async def StopProcess(
@@ -109,16 +144,22 @@ class AnywaydService(ServiceInterface):
             True if process was stopped, Errors if process doesn't exist/not invoked by user
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
+        log.info(
+            "StopProcess requested by %s: uuid=%s signal=%s", user, uuid, signal_num
+        )
         try:
             ret = await self.process_manager.kill(UUID(uuid), user, signal_num)
         except psutil.NoSuchProcess:
+            log.error("StopProcess: process %s not found for user %s", uuid, user)
             self.process_not_found(user, uuid=UUID(uuid))
 
         if not ret:
+            log.error("Failed to kill process uuid=%s", uuid)
             raise DBusError(
                 "com.anywayd.KillFailed", f"Failed to kill process with {uuid=}"
             )
 
+        log.info("Stopped process %s", uuid)
         return True
 
     @dbus_method()
@@ -135,6 +176,7 @@ class AnywaydService(ServiceInterface):
             List of Dicts representing a managed Process
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
+        log.debug("GetProcesses requested by %s: %s", user, uuids)
         procs = await self.process_manager.get_processes_by_uuid(
             set(UUID(uuid) for uuid in uuids), user
         )
@@ -152,8 +194,10 @@ class AnywaydService(ServiceInterface):
             Process information dictionary
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
+        log.debug("GetProcessByPID requested by %s: pid=%s", user, pid)
         process = await self.process_manager.get_process_by_pid(pid, user)
         if process is None:
+            log.error("GetProcessByPID: pid=%s not found for user %s", pid, user)
             self.process_not_found(user, pid=pid)
         return self._format_process(process)
 
@@ -171,6 +215,7 @@ class AnywaydService(ServiceInterface):
             List of Dicts representing managed Processes
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
+        log.debug("GetProcessesByUser requested by %s: limit=%s", user, limit)
         procs = await self.process_manager.get_process_by_user(user, limit)
         return {str(proc.uuid): self._format_process(proc) for proc in procs}
 
@@ -180,6 +225,7 @@ class AnywaydService(ServiceInterface):
         List Process stats concerning calling user
         """
         user = (await self.get_caller_info(curr_msg.get())).pw_name
+        log.debug("GetStats requested by %s", user)
         return {
             k: Variant("x", v)
             for (k, v) in (await self.process_manager.get_stats(user)).items()
@@ -268,6 +314,7 @@ def install_asyncio_handler(loop: asyncio.AbstractEventLoop | None = None):
 
 
 async def service():
+    setup_logging(logging.DEBUG)
     install_asyncio_handler()
     os.makedirs(DB_DIR, exist_ok=True)
     async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
@@ -277,20 +324,19 @@ async def service():
         name_resp = await bus.request_name(SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE)
 
         if name_resp == RequestNameReply.EXISTS:
+            log.critical("Unable to acquire %s, name already in use.", SERVICE_NAME)
             raise RuntimeError(
                 f"Unable to acquire {SERVICE_NAME=}, name already in use."
             )
 
-        print(f"Anywayd D-Bus service running on {OBJECT_PATH}")
-        print(f"Database: {DB_PATH}")
-        print(f"PID: {os.getpid()}")
+        log.info("Anywayd D-Bus service running on [bold]%s[/]", OBJECT_PATH)
+        log.info("Database: %s", DB_PATH)
+        log.info("PID: %s", os.getpid())
 
         try:
             await bus.wait_for_disconnect()
         except:
-            from rich.traceback import install
-
-            _ = install()
+            log.exception("Fatal error, shutting down")
             raise
         finally:
-            print("Shutdown complete")
+            log.info("Shutdown complete")

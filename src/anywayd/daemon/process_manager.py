@@ -15,7 +15,7 @@ import psutil
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from anywayd.daemon.models import Base, Process, get_uid_gid
+from anywayd.daemon.models import Base, Process, get_boot_id, get_uid_gid
 
 log = logging.getLogger("anywayd")
 
@@ -36,12 +36,17 @@ class ProcessManager:
             await conn.run_sync(Base.metadata.create_all)
 
         to_mark_dead: set[UUID] = set()
+        boot_id: UUID = get_boot_id()
         async with self.async_session() as session:
             result = await session.execute(select(Process))
             rows = result.scalars().all()
             log.debug("Found %d process record(s) from previous run", len(rows))
             for process in rows:
-                if process.pid is not None and await self.is_same_process(process):
+                if (
+                    process.boot_id == boot_id
+                    and process.pid is not None
+                    and await self.is_same_process(process)
+                ):
                     log.info(
                         "Reattaching to still-running process %s (pid=%s)",
                         process.uuid,
@@ -246,7 +251,9 @@ class ProcessManager:
     async def _monitor_process(self, uuid: UUID):
         process = self._processes.get(uuid)
         if not process:
-            log.warning("_monitor_process: uuid=%s not tracked, nothing to monitor", uuid)
+            log.warning(
+                "_monitor_process: uuid=%s not tracked, nothing to monitor", uuid
+            )
             return
 
         exited = False
@@ -270,7 +277,9 @@ class ProcessManager:
                 exited = True
                 await self._log_process_end(uuid, exit_code)
         except asyncio.CancelledError:
-            log.debug("_monitor_process: monitoring for %s cancelled (not exited)", uuid)
+            log.debug(
+                "_monitor_process: monitoring for %s cancelled (not exited)", uuid
+            )
             raise
         except Exception:
             log.exception("Error monitoring process %s", uuid)
@@ -297,7 +306,13 @@ class ProcessManager:
             log.warning("kill: uuid=%s not owned by %s or not found", uuid, user)
             raise psutil.NoSuchProcess(-1)
 
-        log.info("Killing uuid=%s pid=%s with signal=%s (by %s)", uuid, process.pid, signal_num, user)
+        log.info(
+            "Killing uuid=%s pid=%s with signal=%s (by %s)",
+            uuid,
+            process.pid,
+            signal_num,
+            user,
+        )
         try:
             os.killpg(process.pid, signal_num)
             return True
@@ -452,7 +467,9 @@ class ProcessManager:
 
     async def close(self):
         if self._process_tasks:
-            log.debug("Cancelling %d outstanding monitor task(s)", len(self._process_tasks))
+            log.debug(
+                "Cancelling %d outstanding monitor task(s)", len(self._process_tasks)
+            )
             tasks = list(self._process_tasks.values())
             for task in tasks:
                 _ = task.cancel()

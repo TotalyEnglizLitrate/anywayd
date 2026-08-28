@@ -313,27 +313,33 @@ def install_asyncio_handler(loop: asyncio.AbstractEventLoop | None = None):
     loop.set_exception_handler(asyncio_exception_handler)
 
 
-async def service():
-    setup_logging(logging.DEBUG)
+async def service(log_level: int = logging.INFO):
+    setup_logging(log_level)
     install_asyncio_handler()
     os.makedirs(DB_DIR, exist_ok=True)
-    async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
-        bus = await AnywaydMessageBus(bus_type=BusType.SYSTEM).connect()
-        service = AnywaydService(pm)
-        bus.export(OBJECT_PATH, service)
-        name_resp = await bus.request_name(SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE)
+    bus = await AnywaydMessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
+            service = AnywaydService(pm)
+            bus.export(OBJECT_PATH, service)
+            name_resp = await bus.request_name(SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE)
 
-        if name_resp == RequestNameReply.EXISTS:
-            log.critical("Unable to acquire %s, name already in use.", SERVICE_NAME)
-            raise RuntimeError(
-                f"Unable to acquire {SERVICE_NAME=}, name already in use."
-            )
+            if name_resp == RequestNameReply.EXISTS:
+                log.critical("Unable to acquire %s, name already in use.", SERVICE_NAME)
+                raise RuntimeError(
+                    f"Unable to acquire {SERVICE_NAME=}, name already in use."
+                )
 
-        log.info("Anywayd D-Bus service running on [bold]%s[/]", OBJECT_PATH)
-        log.info("Database: %s", DB_PATH)
-        log.info("PID: %s", os.getpid())
+            log.info("Anywayd D-Bus service running on [bold]%s[/]", OBJECT_PATH)
+            log.info("Database: %s", DB_PATH)
+            log.info("PID: %s", os.getpid())
 
-        try:
             await bus.wait_for_disconnect()
-        finally:
-            log.info("Shutdown complete")
+    except asyncio.CancelledError:
+        log.info("Received asyncio.CancelledError, shutting down")
+    except Exception:
+        log.exception("Bus disconnected unexpectedly")
+        raise
+    finally:
+        bus.disconnect()
+        log.info("Shutdown complete")

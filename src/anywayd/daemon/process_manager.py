@@ -249,20 +249,40 @@ class ProcessManager:
             log.warning("_monitor_process: uuid=%s not tracked, nothing to monitor", uuid)
             return
 
-        if isinstance(process, psutil.Process):
-            wait_fut = asyncio.to_thread(process.wait)
-        else:
-            wait_fut = process.wait()
-
+        exited = False
         try:
-            exit_code = await wait_fut
-            await self._log_process_end(uuid, exit_code)
+            if isinstance(process, psutil.Process):
+                # psutil.Process.wait() blocks a real OS thread with no way to
+                # interrupt it from outside; asyncio cancellation only detaches
+                # from the future, it doesn't stop the thread. Poll instead so
+                # this coroutine is actually cancellable (needed for shutdown).
+                exit_code = None
+                while True:
+                    try:
+                        exit_code = await asyncio.to_thread(process.wait, timeout=1)
+                        break
+                    except psutil.TimeoutExpired:
+                        continue
+                exited = True
+                await self._log_process_end(uuid, exit_code)
+            else:
+                exit_code = await process.wait()
+                exited = True
+                await self._log_process_end(uuid, exit_code)
+        except asyncio.CancelledError:
+            log.debug("_monitor_process: monitoring for %s cancelled (not exited)", uuid)
+            raise
         except Exception:
             log.exception("Error monitoring process %s", uuid)
         finally:
             _ = self._processes.pop(uuid, None)
             _ = self._process_tasks.pop(uuid, None)
-            await self.mark_dead(uuid)
+            # Only mark dead if we actually observed the process exit. If we
+            # were cancelled (e.g. daemon shutdown), the process is likely
+            # still running and should stay tracked for reattachment on
+            # the next startup.
+            if exited:
+                await self.mark_dead(uuid)
 
     async def kill(
         self, uuid: UUID, user: str, signal_num: int = signal.SIGTERM
@@ -431,6 +451,13 @@ class ProcessManager:
         }
 
     async def close(self):
+        if self._process_tasks:
+            log.debug("Cancelling %d outstanding monitor task(s)", len(self._process_tasks))
+            tasks = list(self._process_tasks.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
         log.debug("Closing process manager, disposing engine")
         await self.engine.dispose()
 

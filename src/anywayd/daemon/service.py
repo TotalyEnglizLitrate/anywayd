@@ -270,7 +270,7 @@ class AnywaydService(ServiceInterface):
         return {
             "uuid": Variant("s", str(proc.uuid)),
             "pid": Variant("x", proc.pid if proc.pid is not None else -1),
-            "command": Variant("s", proc.command),
+            "command": Variant("s", f"{proc.command} {proc.arguments}"),
             "env": Variant("s", proc.env),
             "cwd": Variant("s", proc.cwd),
             "invoked_by_user": Variant("s", proc.invoked_by_user),

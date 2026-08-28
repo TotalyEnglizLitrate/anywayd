@@ -1,10 +1,11 @@
+import asyncio
 import contextvars
 import os
 import pwd
 import shlex
 import signal
 
-from typing import Annotated, cast, final, override
+from typing import Annotated, Any, cast, final, override
 from datetime import datetime, UTC
 from uuid import UUID
 
@@ -15,6 +16,8 @@ from dbus_fast.service import ServiceInterface, dbus_method
 from dbus_fast.aio.message_bus import MessageBus
 from dbus_fast.message import Message
 import psutil
+from rich.console import Console
+from rich.logging import RichHandler
 
 
 from anywayd.daemon.models import Process
@@ -155,7 +158,9 @@ class AnywaydService(ServiceInterface):
         return self._format_process(process)
 
     @dbus_method()
-    async def GetProcessesByUser(self, limit: DBusUInt32 = 100) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
+    async def GetProcessesByUser(
+        self, limit: DBusUInt32 = 100
+    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
         """
         List all tracked processes.
 
@@ -168,7 +173,6 @@ class AnywaydService(ServiceInterface):
         user = (await self.get_caller_info(curr_msg.get())).pw_name
         procs = await self.process_manager.get_process_by_user(user, limit)
         return {str(proc.uuid): self._format_process(proc) for proc in procs}
-
 
     @dbus_method()
     async def GetStats(self) -> DBusDict:
@@ -247,7 +251,24 @@ class AnywaydService(ServiceInterface):
         )
 
 
+def asyncio_exception_handler(
+    loop: asyncio.AbstractEventLoop,
+    context: dict[str, Any],  # pyright: ignore[reportExplicitAny]
+):
+    exc: Exception | None = context.get("exception")
+    if exc is not None:
+        Console().print_exception()
+    else:
+        loop.default_exception_handler(context)
+
+
+def install_asyncio_handler(loop: asyncio.AbstractEventLoop | None = None):
+    loop = loop or asyncio.get_event_loop()
+    loop.set_exception_handler(asyncio_exception_handler)
+
+
 async def service():
+    install_asyncio_handler()
     os.makedirs(DB_DIR, exist_ok=True)
     async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
         bus = await AnywaydMessageBus(bus_type=BusType.SYSTEM).connect()

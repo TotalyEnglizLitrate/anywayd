@@ -5,6 +5,7 @@ from rich.traceback import install
 
 from anywayd.daemon.service import service
 
+
 def _ensure_su():
     if os.geteuid() != 0:
         raise PermissionError("The anywayd daemon needs to be run as root.")

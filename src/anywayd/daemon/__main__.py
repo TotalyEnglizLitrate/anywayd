@@ -1,3 +1,3 @@
-from anywayd.daemon.cli import main
+from anywayd.daemon.cli import app
 
-main()
+app()

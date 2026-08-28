@@ -73,7 +73,9 @@ class ProcessManager:
         log.debug("Marked dead: %s", uuid)
 
     async def is_same_process(self, process_db: Process):
-        if process_db.pid is not None and psutil.pid_exists(process_db.pid):
+        if process_db.pid is None:
+            return True
+        if psutil.pid_exists(process_db.pid):
             curr_process = psutil.Process(process_db.pid)
             if abs(
                 process_db.started_at

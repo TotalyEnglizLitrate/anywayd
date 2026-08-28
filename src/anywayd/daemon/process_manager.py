@@ -164,8 +164,6 @@ class ProcessManager:
         )
 
         log_dir = f"/var/log/anywayd/{process_uuid}"
-        os.makedirs(log_dir, mode=0o700, exist_ok=True)
-
         stdout_path = os.path.join(log_dir, "stdout")
         stderr_path = os.path.join(log_dir, "stderr")
         privdrop = os.path.join(os.path.dirname(__file__), "_privdrop_exec.py")

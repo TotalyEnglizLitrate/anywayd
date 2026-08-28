@@ -24,6 +24,9 @@ def parse_args(opts: list[str]) -> Args:
 
 
 def open_and_lock_down(path: str, fd_target: int, uid: int, gid: int) -> None:
+    parent_dir = os.path.dirname(path)
+    os.makedirs(parent_dir, mode=0o700, exist_ok=True)
+    os.chown(parent_dir, uid, gid)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         os.fchown(fd, uid, gid)

@@ -35,7 +35,7 @@ class ProcessManager:
         async with self.async_session() as session:
             result = await session.execute(select(Process))
             for process in result.scalars().all():
-                if self.is_same_process(process):
+                if await self.is_same_process(process):
                     process_ps = psutil.Process(process.pid)
                     self._processes[process.uuid] = process_ps
                     task = asyncio.create_task(self._monitor_process(process.uuid))
@@ -56,7 +56,7 @@ class ProcessManager:
             )
             await session.commit()
 
-    def is_same_process(self, process_db: Process):
+    async def is_same_process(self, process_db: Process):
         if process_db.pid is not None and psutil.pid_exists(process_db.pid):
             curr_process = psutil.Process(process_db.pid)
             if abs(
@@ -66,6 +66,7 @@ class ProcessManager:
                 return False
 
             return True
+        await self.mark_dead(process_db.uuid)
         return False
 
     async def log_process_start(
@@ -257,7 +258,7 @@ class ProcessManager:
                 .scalars()
                 .all()
             )
-        return [process for process in processes if self.is_same_process(process)]
+        return [process for process in processes if await self.is_same_process(process)]
 
     async def get_process_by_user(self, user: str, limit: int) -> list[Process]:
         async with self.async_session() as session:
@@ -274,7 +275,7 @@ class ProcessManager:
                 .all()
             )
 
-        return [process for process in processes if self.is_same_process(process)]
+        return [process for process in processes if await self.is_same_process(process)]
 
     async def get_process_by_pid(self, pid: int, user: str) -> Process | None:
         async with self.async_session() as session:
@@ -286,7 +287,7 @@ class ProcessManager:
             candidates = result.scalars().all()
 
         for process in candidates:
-            if self.is_same_process(process):
+            if await self.is_same_process(process):
                 return process
         return None
 
@@ -350,7 +351,7 @@ class ProcessManager:
             processes = result.scalars().all()
 
             for process in processes:
-                if process.pid is not None and self.is_same_process(process):
+                if process.pid is not None and await self.is_same_process(process):
                     try:
                         await asyncio.to_thread(os.kill, process.pid, 0)
                         continue

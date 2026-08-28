@@ -24,7 +24,7 @@ class ProcessManager:
         self.async_session = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
-        self._processes: dict[UUID, psutil.Process] = {}
+        self._processes: dict[UUID, asyncio.subprocess.Process | psutil.Process] = {}
         self._process_tasks: dict[UUID, asyncio.Task[None]] = {}
 
     async def initialize(self):
@@ -187,8 +187,7 @@ class ProcessManager:
         )
 
         await self.update_process_pid(process_uuid, process.pid)
-        self._processes[process_uuid] = psutil.Process(process.pid)
-
+        self._processes[process_uuid] = process
         task = asyncio.create_task(self._monitor_process(process_uuid))
         self._process_tasks[process_uuid] = task
 
@@ -199,8 +198,13 @@ class ProcessManager:
         if not process:
             return
 
+        if isinstance(process, psutil.Process):
+            wait_fut = asyncio.to_thread(process.wait)
+        else:
+            wait_fut = process.wait()
+
         try:
-            exit_code = await asyncio.to_thread(process.wait)
+            exit_code = await wait_fut
             await self._log_process_end(uuid, exit_code)
         except Exception as e:
             print(f"Error monitoring process {uuid}: {e}")

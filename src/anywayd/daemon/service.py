@@ -183,25 +183,6 @@ class AnywaydService(ServiceInterface):
         return {str(proc.uuid): self._format_process(proc) for proc in procs}
 
     @dbus_method()
-    async def GetProcessByPID(self, pid: DBusUInt32) -> DBusDict:
-        """
-        Get process information by PID.
-
-        Args:
-            pid: Process ID
-
-        Returns:
-            Process information dictionary
-        """
-        user = (await self.get_caller_info(curr_msg.get())).pw_name
-        log.info("GetProcessByPID requested by %s: pid=%s", user, pid)
-        process = await self.process_manager.get_process_by_pid(pid, user)
-        if process is None:
-            log.error("GetProcessByPID: pid=%s not found for user %s", pid, user)
-            self.process_not_found(user, pid=pid)
-        return self._format_process(process)
-
-    @dbus_method()
     async def GetProcessesByUser(
         self, limit: DBusUInt32 = 100
     ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sa{sv}}")]:

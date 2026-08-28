@@ -5,7 +5,6 @@ import os
 import signal
 import sys
 
-from collections.abc import Iterable
 from datetime import datetime, UTC, timedelta
 from typing import final
 from contextlib import asynccontextmanager
@@ -366,42 +365,6 @@ class ProcessManager:
             )
 
         return [process for process in processes if await self.is_same_process(process)]
-
-    async def get_process_by_pid(self, pid: int, user: str) -> Process | None:
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(Process).where(
-                    (Process.pid == pid) & (Process.invoked_by_user == user)
-                )
-            )
-            candidates = result.scalars().all()
-
-        for process in candidates:
-            if await self.is_same_process(process):
-                return process
-        return None
-
-    async def list_processes(
-        self,
-        user: str,
-        limit: int = 100,
-        offset: int = 0,
-        running_only: bool = False,
-    ) -> Iterable[Process]:
-        async with self.async_session() as session:
-            query = (
-                select(Process)
-                .order_by(Process.started_at.desc())
-                .where(Process.invoked_by_user == user)
-            )
-
-            if running_only:
-                query = query.where(Process.ended_at.is_(None))
-
-            query = query.offset(offset).limit(limit)
-
-            result = await session.execute(query)
-            return result.scalars().all()
 
     async def count_processes(self, user: str, running_only: bool = False) -> int:
         async with self.async_session() as session:

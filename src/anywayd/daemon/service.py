@@ -322,7 +322,9 @@ async def service(log_level: int = logging.INFO):
         async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
             service = AnywaydService(pm)
             bus.export(OBJECT_PATH, service)
-            name_resp = await bus.request_name(SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE)
+            name_resp = await bus.request_name(
+                SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE
+            )
 
             if name_resp == RequestNameReply.EXISTS:
                 log.critical("Unable to acquire %s, name already in use.", SERVICE_NAME)

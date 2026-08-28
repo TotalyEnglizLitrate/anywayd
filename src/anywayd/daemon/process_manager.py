@@ -455,8 +455,8 @@ class ProcessManager:
             log.debug("Cancelling %d outstanding monitor task(s)", len(self._process_tasks))
             tasks = list(self._process_tasks.values())
             for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+                _ = task.cancel()
+            _ = await asyncio.gather(*tasks, return_exceptions=True)
 
         log.debug("Closing process manager, disposing engine")
         await self.engine.dispose()

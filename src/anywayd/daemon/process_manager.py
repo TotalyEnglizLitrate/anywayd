@@ -38,7 +38,8 @@ class ProcessManager:
                 if self.is_same_process(process):
                     process_ps = psutil.Process(process.pid)
                     self._processes[process.uuid] = process_ps
-                    await self._monitor_process(process.uuid)
+                    task = asyncio.create_task(self._monitor_process(process.uuid))
+                    self._process_tasks[process.uuid] = task
                 else:
                     to_mark_dead.add(process.uuid)
 

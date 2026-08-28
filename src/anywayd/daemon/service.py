@@ -165,7 +165,7 @@ class AnywaydService(ServiceInterface):
     @dbus_method()
     async def GetProcesses(
         self, uuids: Annotated[list[str], DBusSignature("as")]
-    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
+    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sa{sv}}")]:
         """
         Get information about processes.
 
@@ -204,7 +204,7 @@ class AnywaydService(ServiceInterface):
     @dbus_method()
     async def GetProcessesByUser(
         self, limit: DBusUInt32 = 100
-    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sv}")]:
+    ) -> Annotated[dict[str, DBusDict], DBusSignature("a{sa{sv}}")]:
         """
         List all tracked processes.
 

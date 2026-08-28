@@ -249,9 +249,9 @@ class AnywaydService(ServiceInterface):
     def _format_process(self, proc: Process) -> DBusDict:
         """Format process status for D-Bus response."""
         return {
-            "uuid": Variant("s", str(proc.uuid)),
+            "uuid": Variant("s", proc.uuid.hex),
             "pid": Variant("x", proc.pid if proc.pid is not None else -1),
-            "command": Variant("s", proc.arguments),
+            "command": Variant("s", proc.command),
             "arguments": Variant("s", proc.arguments),
             "env": Variant("s", proc.env),
             "cwd": Variant("s", proc.cwd),
@@ -264,7 +264,7 @@ class AnywaydService(ServiceInterface):
             "exit_code": Variant(
                 "x", proc.exit_code if proc.exit_code is not None else -1
             ),
-            "boot_id": Variant("s", str(proc.boot_id)),
+            "boot_id": Variant("s", proc.boot_id.hex),
         }
 
     def process_not_found(

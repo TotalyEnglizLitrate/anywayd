@@ -14,7 +14,7 @@ import psutil
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from .models import Base, Process, get_uid_gid
+from anywayd.daemon.models import Base, Process, get_uid_gid
 
 
 @final

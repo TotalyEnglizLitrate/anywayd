@@ -24,6 +24,7 @@
   };
 
   outputs = {
+    self,
     nixpkgs,
     pyproject-nix,
     uv2nix,
@@ -101,5 +102,7 @@
             '';
         });
     });
+
+    nixosModules.default = import ./nixos-module.nix;
   };
 }

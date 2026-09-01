@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from uuid import UUID
 
 import psutil
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from anywayd.daemon.models import Base, Process, get_boot_id, get_uid_gid
@@ -35,6 +35,7 @@ class ProcessManager:
             await conn.run_sync(Base.metadata.create_all)
 
         to_mark_dead: set[UUID] = set()
+        to_reap: set[UUID] = set()
         boot_id: UUID = get_boot_id()
         async with self.async_session() as session:
             result = await session.execute(select(Process))
@@ -55,12 +56,16 @@ class ProcessManager:
                     self._processes[process.uuid] = process_ps
                     task = asyncio.create_task(self._monitor_process(process.uuid))
                     self._process_tasks[process.uuid] = task
+                elif process.boot_id != boot_id:
+                    to_reap.add(process.uuid)
                 else:
                     to_mark_dead.add(process.uuid)
 
         if to_mark_dead:
             log.info("Marking %d stale process record(s) as dead", len(to_mark_dead))
-        await self.mark_dead(to_mark_dead)
+        if to_reap:
+            log.info("Reaping %d stale processes from different boots", len(to_reap))
+        _ = await asyncio.gather(self.mark_dead(to_mark_dead), self.reap(to_reap))
 
     async def mark_dead(self, uuid: set[UUID] | UUID):
         if isinstance(uuid, UUID):
@@ -75,6 +80,20 @@ class ProcessManager:
             )
             await session.commit()
         log.debug("Marked dead: %s", uuid)
+
+    async def reap(self, uuid: set[UUID] | UUID):
+        if isinstance(uuid, UUID):
+            uuid = set((uuid,))
+        if not uuid:
+            return
+        async with self.async_session() as session:
+            _ = await session.execute(
+                delete(Process)
+                .where(Process.uuid.in_(uuid))
+            )
+            await session.commit()
+        log.debug("Reaped: %s", uuid)
+
 
     async def is_same_process(self, process_db: Process):
         if process_db.pid is None:

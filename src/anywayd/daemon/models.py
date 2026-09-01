@@ -1,11 +1,12 @@
 import pwd
 
 from datetime import datetime, UTC
-from typing import Self
+from typing import Any, Optional, Self, final, override
 from uuid import uuid4, UUID as UUID_py
 
+from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import DateTime, String, UUID
+from sqlalchemy.types import DateTime, String, TypeDecorator, UUID
 
 
 def get_boot_id() -> UUID_py:
@@ -19,6 +20,24 @@ def get_uid_gid(name: str) -> tuple[int, int]:
         return user.pw_uid, user.pw_gid
     except KeyError:
         raise ValueError(f"No user found with {name=}")
+
+
+@final
+class TZDateTime(TypeDecorator[datetime]):
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    @override
+    def process_result_value(
+        self,
+        value: Optional[Any],  # pyright: ignore[reportDeprecated, reportExplicitAny]
+        dialect: Dialect,
+    ) -> Optional[datetime]:  # pyright: ignore[reportDeprecated]
+        assert isinstance(value, datetime) or value is None
+        if value is not None:
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+        return value
 
 
 class Base(DeclarativeBase):
@@ -37,11 +56,9 @@ class Process(Base):
     invoked_by_user: Mapped[str] = mapped_column(String(30))
     run_as_user: Mapped[str] = mapped_column(String(30))
     started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        TZDateTime, default=lambda: datetime.now(UTC)
     )
-    ended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    ended_at: Mapped[datetime | None] = mapped_column(TZDateTime, default=None)
     exit_code: Mapped[int | None] = mapped_column(default=None)
     boot_id: Mapped[UUID_py] = mapped_column(UUID, default=get_boot_id)
 

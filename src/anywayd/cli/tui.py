@@ -241,7 +241,9 @@ class DashboardView(Static):
                     UUID(k): Process.from_dict(**v)  # pyright: ignore[reportAny]
                     for k, v in cast(  # pyright: ignore[reportAny]
                         dict[str, Any],  # pyright: ignore[reportExplicitAny]
-                        _unwrap(await client.get_processes_by_user(100)),  # pyright: ignore[reportAny]
+                        _unwrap(
+                            await client.get_processes_by_user(100)
+                        ),  # pyright: ignore[reportAny]
                     ).items()
                 }
         except Exception as exc:

@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import functools
 import logging
 import os
 import pwd
@@ -13,7 +14,7 @@ from uuid import UUID
 from dbus_fast import DBusError, Variant
 from dbus_fast.annotations import DBusBool, DBusSignature, DBusStr, DBusDict, DBusUInt32
 from dbus_fast.constants import BusType, MessageType, NameFlag, RequestNameReply
-from dbus_fast.service import ServiceInterface, dbus_method
+from dbus_fast.service import ServiceInterface, dbus_method, dbus_signal
 from dbus_fast.aio.message_bus import MessageBus
 from dbus_fast.message import Message
 import psutil
@@ -22,7 +23,11 @@ from rich.logging import RichHandler
 
 
 from anywayd.daemon.models import Process
-from anywayd.daemon.process_manager import ProcessManager, process_manager
+from anywayd.daemon.process_manager import (
+    ChangeCallback,
+    ProcessManager,
+    process_manager,
+)
 from anywayd import __version__
 
 SERVICE_NAME = "com.anywayd.daemon"
@@ -225,6 +230,10 @@ class AnywaydService(ServiceInterface):
         """
         return (await self.get_caller_info(curr_msg.get())).pw_uid
 
+    @dbus_signal()
+    def Changed(self, uuids: set[UUID]) -> Annotated[list[str], DBusSignature("as")]:
+        return [uuid.hex for uuid in uuids]
+
     async def get_caller_info(self, msg: Message) -> pwd.struct_passwd:
         bus = await MessageBus(
             bus_type=BusType.SYSTEM, negotiate_unix_fd=True
@@ -303,6 +312,10 @@ async def service(log_level: int = logging.INFO):
     try:
         async with process_manager(f"sqlite+aiosqlite:///{DB_PATH}") as pm:
             service = AnywaydService(pm)
+            on_change: ChangeCallback = functools.partial(
+                AnywaydService.Changed, service
+            )
+            pm.register_callback(on_change)
             bus.export(OBJECT_PATH, service)
             name_resp = await bus.request_name(
                 SERVICE_NAME, flags=NameFlag.DO_NOT_QUEUE

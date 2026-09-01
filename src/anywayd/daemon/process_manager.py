@@ -6,7 +6,7 @@ import signal
 import sys
 
 from datetime import datetime, UTC, timedelta
-from typing import final
+from typing import Any, Callable, final
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -19,6 +19,9 @@ from anywayd.daemon.models import Base, Process, get_boot_id, get_uid_gid
 log = logging.getLogger("anywayd")
 
 
+type ChangeCallback = Callable[[set[UUID]], Any]  # pyright: ignore[reportExplicitAny]
+
+
 @final
 class ProcessManager:
     def __init__(self, database_url: str):
@@ -28,6 +31,7 @@ class ProcessManager:
         )
         self._processes: dict[UUID, asyncio.subprocess.Process | psutil.Process] = {}
         self._process_tasks: dict[UUID, asyncio.Task[None]] = {}
+        self._callbacks: list[ChangeCallback] = []
 
     async def initialize(self):
         log.debug("Initializing process manager, creating tables if needed")
@@ -80,6 +84,7 @@ class ProcessManager:
             )
             await session.commit()
         log.debug("Marked dead: %s", uuid)
+        self._run_callbacks(uuid)
 
     async def reap(self, uuid: set[UUID] | UUID):
         if isinstance(uuid, UUID):
@@ -87,13 +92,10 @@ class ProcessManager:
         if not uuid:
             return
         async with self.async_session() as session:
-            _ = await session.execute(
-                delete(Process)
-                .where(Process.uuid.in_(uuid))
-            )
+            _ = await session.execute(delete(Process).where(Process.uuid.in_(uuid)))
             await session.commit()
         log.debug("Reaped: %s", uuid)
-
+        self._run_callbacks(uuid)
 
     async def is_same_process(self, process_db: Process):
         if process_db.pid is None:
@@ -149,6 +151,7 @@ class ProcessManager:
                 log.debug("Updated uuid=%s with pid=%s", uuid, pid)
             else:
                 log.warning("update_process_pid: no row found for uuid=%s", uuid)
+        self._run_callbacks(set((uuid,)))
 
     async def _log_process_end(self, uuid: UUID, exit_code: int):
         async with self.async_session() as session:
@@ -161,6 +164,7 @@ class ProcessManager:
                 log.info("Process %s exited with code %s", uuid, exit_code)
             else:
                 log.warning("_log_process_end: no row found for uuid=%s", uuid)
+        self._run_callbacks(set((uuid,)))
 
     async def spawn(
         self,
@@ -457,6 +461,18 @@ class ProcessManager:
 
         log.debug("Closing process manager, disposing engine")
         await self.engine.dispose()
+
+    def register_callback(self, fn: ChangeCallback) -> None:
+        self._callbacks.append(fn)
+
+    def _run_callbacks(self, uuids: set[UUID]) -> None:
+        for callback in self._callbacks:
+            try:
+                _ = callback(uuids)
+            except Exception as e:
+                log.warning(
+                    "Error while executing callback %s.", callback.__name__, exc_info=e
+                )
 
 
 @asynccontextmanager

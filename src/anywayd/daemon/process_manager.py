@@ -71,31 +71,33 @@ class ProcessManager:
             log.info("Reaping %d stale processes from different boots", len(to_reap))
         _ = await asyncio.gather(self.mark_dead(to_mark_dead), self.reap(to_reap))
 
-    async def mark_dead(self, uuid: set[UUID] | UUID):
-        if isinstance(uuid, UUID):
-            uuid = set((uuid,))
-        if not uuid:
+    async def mark_dead(self, uuids: set[UUID] | UUID):
+        if isinstance(uuids, UUID):
+            uuids = set((uuids,))
+        if not uuids:
             return
         async with self.async_session() as session:
             _ = await session.execute(
                 update(Process)
-                .where(Process.uuid.in_(uuid) & (Process.pid.is_not(None)))
+                .where(Process.uuid.in_(uuids) & (Process.pid.is_not(None)))
                 .values(pid=None)
             )
             await session.commit()
-        log.debug("Marked dead: %s", uuid)
-        self._run_callbacks(uuid)
+        log.debug("Marked dead: %s", uuids)
+        self._run_callbacks(uuids)
 
-    async def reap(self, uuid: set[UUID] | UUID):
-        if isinstance(uuid, UUID):
-            uuid = set((uuid,))
-        if not uuid:
+    async def reap(self, uuids: set[UUID] | UUID):
+        if isinstance(uuids, UUID):
+            uuids = set((uuids,))
+        if not uuids:
             return
         async with self.async_session() as session:
-            _ = await session.execute(delete(Process).where(Process.uuid.in_(uuid)))
+            _ = await session.execute(delete(Process).where(Process.uuid.in_(uuids)))
             await session.commit()
-        log.debug("Reaped: %s", uuid)
-        self._run_callbacks(uuid)
+        for uuid in uuids:
+            os.rmdir(f"/var/log/anywayd/{uuid}")
+        log.debug("Reaped: %s", uuids)
+        self._run_callbacks(uuids)
 
     async def is_same_process(self, process_db: Process):
         if process_db.pid is None:
@@ -352,16 +354,16 @@ class ProcessManager:
             return False
 
     async def get_processes_by_uuid(
-        self, uuid: set[UUID] | UUID, user: str
+        self, uuids: set[UUID] | UUID, user: str
     ) -> list[Process]:
-        if isinstance(uuid, UUID):
-            uuid = set((uuid,))
+        if isinstance(uuids, UUID):
+            uuids = set((uuids,))
         async with self.async_session() as session:
             processes = (
                 (
                     await session.execute(
                         select(Process).where(
-                            (Process.uuid.in_(uuid)) & (Process.invoked_by_user == user)
+                            (Process.uuid.in_(uuids)) & (Process.invoked_by_user == user)
                         )
                     )
                 )
@@ -468,7 +470,7 @@ class ProcessManager:
     def _run_callbacks(self, uuids: set[UUID]) -> None:
         for callback in self._callbacks:
             try:
-                _ = callback(uuids)
+                _ = callback(uuids)  # pyright: ignore[reportAny]
             except Exception as e:
                 log.warning(
                     "Error while executing callback %s.", callback.__name__, exc_info=e

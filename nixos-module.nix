@@ -27,7 +27,7 @@ in {
       description = "anywayd daemon - background process manager";
       restartTriggers = [cfg.package];
       serviceConfig = {
-        ExecStart = lib.getExe cfg.package;
+        ExecStart = lib.getExe' cfg.package "anywayd";
         Restart = "on-failure";
       };
       wantedBy = ["multi-user.target"];

@@ -1,7 +1,7 @@
 import re
 
 from contextlib import asynccontextmanager
-from typing import Any, final
+from typing import Any, Callable, final
 
 from dbus_fast.aio import MessageBus
 from dbus_fast.aio.proxy_object import ProxyInterface
@@ -24,6 +24,14 @@ class DBusClient:
     ) -> Any:  # pyright: ignore[reportExplicitAny]
         call_name = f"call_{_to_snake_case(name)}"
         return getattr(self._interface, call_name)  # pyright: ignore[reportAny]
+
+    def on(
+        self,
+        signal_name: str,
+        callback: Callable[..., Any],  # pyright: ignore[reportExplicitAny]
+    ) -> None:
+        signal_snake = _to_snake_case(signal_name)
+        getattr(self._interface, f"on_{signal_snake}")(callback)
 
 
 @asynccontextmanager

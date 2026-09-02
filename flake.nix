@@ -94,11 +94,17 @@
           venv = pythonSet.mkVirtualEnv "anywayd" workspace.deps.default;
           package = pythonSet.anywayd;
         }).overrideAttrs (old: {
+          nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.installShellFiles];
           postInstall =
             (old.postInstall or "")
             + ''
               install -Dm644 ${./com.anywayd.daemon.conf} \
                 $out/share/dbus-1/system.d/com.anywayd.daemon.conf
+ 
+              installShellCompletion --cmd anyway \
+                --bash <(_ANYWAY_COMPLETE=source_bash $out/bin/anyway) \
+                --zsh  <(_ANYWAY_COMPLETE=source_zsh  $out/bin/anyway) \
+                --fish <(_ANYWAY_COMPLETE=source_fish $out/bin/anyway)
             '';
         });
     });

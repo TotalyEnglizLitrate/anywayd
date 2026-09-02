@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import random
+import signal
 import string
 
 from collections.abc import AsyncGenerator
@@ -11,18 +12,22 @@ from uuid import UUID
 
 from dbus_fast import Variant
 from textual.app import App, ComposeResult
-from textual.containers import Grid, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.types import NoSelection
 from textual.widgets import (
+    Button,
     DataTable,
     Footer,
     Header,
+    Label,
     RichLog,
+    Select,
     Static,
     TabbedContent,
     TabPane,
 )
-from textual.widgets.data_table import ColumnKey, RowDoesNotExist, RowKey
+from textual.widgets.data_table import ColumnKey, RowDoesNotExist
 
 from anywayd.cli.dbus_client import DBusClient, dbus_client
 from anywayd.daemon.models import Process
@@ -242,6 +247,126 @@ class LogModalScreen(ModalScreen[None]):
         _ = stderr_log.write(stderr_text)
 
 
+
+@final
+class SignalPickerScreen(ModalScreen[int]):
+    """Modal screen for selecting a signal to send to a process."""
+
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    CSS = """
+    SignalPickerScreen {
+        align: center middle;
+    }
+
+    #signal-picker-box {
+        width: 40;
+        height: 20;
+        border: round $accent;
+        background: $surface;
+        padding: 1;
+    }
+
+    #signal-picker-title {
+        text-style: bold;
+        background: $panel;
+        padding: 0 1;
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #signal-select {
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #signal-picker-buttons {
+        width: 100%;
+        height: 3;
+        align: center middle;
+    }
+
+    #signal-picker-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    # All available signals (excluding ones that might be problematic)
+    SIGNALS = [
+        ("SIGABRT", signal.SIGABRT),
+        ("SIGALRM", signal.SIGALRM),
+        ("SIGBUS", signal.SIGBUS),
+        ("SIGCHLD", signal.SIGCHLD),
+        ("SIGCONT", signal.SIGCONT),
+        ("SIGFPE", signal.SIGFPE),
+        ("SIGHUP", signal.SIGHUP),
+        ("SIGILL", signal.SIGILL),
+        ("SIGINT", signal.SIGINT),
+        ("SIGKILL", signal.SIGKILL),
+        ("SIGPIPE", signal.SIGPIPE),
+        ("SIGPOLL", signal.SIGPOLL),
+        ("SIGPROF", signal.SIGPROF),
+        ("SIGPWR", signal.SIGPWR),
+        ("SIGQUIT", signal.SIGQUIT),
+        ("SIGSEGV", signal.SIGSEGV),
+        ("SIGSTOP", signal.SIGSTOP),
+        ("SIGSYS", signal.SIGSYS),
+        ("SIGTERM", signal.SIGTERM),
+        ("SIGTRAP", signal.SIGTRAP),
+        ("SIGTSTP", signal.SIGTSTP),
+        ("SIGTTIN", signal.SIGTTIN),
+        ("SIGTTOU", signal.SIGTTOU),
+        ("SIGURG", signal.SIGURG),
+        ("SIGUSR1", signal.SIGUSR1),
+        ("SIGUSR2", signal.SIGUSR2),
+        ("SIGVTALRM", signal.SIGVTALRM),
+        ("SIGWINCH", signal.SIGWINCH),
+        ("SIGXCPU", signal.SIGXCPU),
+        ("SIGXFSZ", signal.SIGXFSZ),
+    ]
+
+    def __init__(self, uuid: UUID, command: str, pid: int) -> None:
+        super().__init__()
+        self._uuid = uuid
+        self._command = command
+        self._pid = pid
+        self._selected_signal: int | None = None
+
+    @override
+    def compose(self) -> ComposeResult:
+        with Vertical(id="signal-picker-box"):
+            yield Label(
+                f"Select signal for {self._command} (PID={self._pid})",
+                id="signal-picker-title",
+            )
+            yield Select(
+                [(name, sig) for name, sig in self.SIGNALS],
+                prompt="Choose a signal...",
+                id="signal-select",
+            )
+            with Horizontal(id="signal-picker-buttons"):
+                yield Button("Send", variant="primary", id="signal-send-btn")
+                yield Button("Cancel", variant="default", id="signal-cancel-btn")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "signal-send-btn":
+            select = cast(Select[int], self.query_one("#signal-select"))
+            if select.value != Select.NULL and not isinstance(select.value, NoSelection):
+                self._selected_signal = select.value
+                _ = self.dismiss(self._selected_signal)
+        elif event.button.id == "signal-cancel-btn":
+            _ = self.dismiss(None)
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        """Enable/disable send button based on selection."""
+        send_btn = self.query_one("#signal-send-btn", Button)
+        send_btn.disabled = event.value is None
+
+    def on_mount(self) -> None:
+        """Initialize the send button as disabled."""
+        send_btn = self.query_one("#signal-send-btn", Button)
+        send_btn.disabled = True
+        
 @final
 class DashboardView(Static):
     """Daemon stats up top, tracked processes in a scrollable table below.
@@ -249,6 +374,13 @@ class DashboardView(Static):
     Click (or select + Enter) a row to open a modal with that process's
     stdout/stderr.
     """
+
+    BINDINGS = [
+        ("k", "kill", "Kill (SIGKILL)"),
+        ("t", "terminate", "Terminate (SIGTERM)"),
+        ("i", "interrupt", "Interrupt (SIGINT)"),
+        ("s", "signal_picker", "Send signal ...")
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -275,6 +407,97 @@ class DashboardView(Static):
         assert client is not None
         await self._build()
         client.on("Changed", functools.partial(DashboardView._build, self))
+
+    async def _send_signal_to_selected(self, signal_num: int) -> None:
+        """Send a signal to the currently selected process."""
+        table = cast(DataTable[str], self.query_one("#process-table", DataTable))
+        try:
+            row_key = table.get_row_at(table.cursor_row)[0]
+        except RowDoesNotExist:
+            return
+
+        uuid = UUID(row_key)
+        proc = self._procs.get(uuid)
+        if proc is None:
+            return
+
+        app = cast(AnywaydApp, self.app)
+        if proc.pid is None:
+            app.notify(
+                f"Process {uuid} is not running (no PID)",
+                title="Signal Failed",
+                severity="warning",
+            )
+            return
+
+        try:
+            async with (
+                app._client_manager.use_client() as client  # pyright: ignore[reportPrivateUsage]
+            ):
+                success = await client.stop_process(  # pyright: ignore[reportAny]
+                    uuid.hex, signal_num
+                )
+                if success:
+                    signal_name = signal.Signals(signal_num).name
+                    app.notify(
+                        f"Sent {signal_name} to {proc.command} (PID={proc.pid})",
+                        title="Signal Sent",
+                        severity="information",
+                    )
+                else:
+                    app.notify(
+                        f"Failed to send signal to {proc.command} (PID={proc.pid})",
+                        title="Signal Failed",
+                        severity="error",
+                    )
+        except Exception as e:
+            app.notify(
+                f"Error sending signal: {e}",
+                title="Signal Failed",
+                severity="error",
+            )
+
+    async def action_kill(self) -> None:
+        """Send SIGKILL to selected process."""
+        await self._send_signal_to_selected(signal.SIGKILL)
+
+    async def action_terminate(self) -> None:
+        """Send SIGTERM to selected process."""
+        await self._send_signal_to_selected(signal.SIGTERM)
+
+    async def action_interrupt(self) -> None:
+        """Send SIGINT to selected process."""
+        await self._send_signal_to_selected(signal.SIGINT)
+
+
+    async def action_signal_picker(self) -> None:
+        """Open signal picker modal to send any signal."""
+        table = cast(DataTable[str], self.query_one("#process-table", DataTable))
+        row_key = table.get_row_at(table.cursor_row)[0]
+        uuid = UUID(row_key)
+        proc = self._procs.get(uuid)
+        if proc is None:
+            return
+
+        app = cast(AnywaydApp, self.app)
+        if proc.pid is None:
+            app.notify(
+                f"Process {uuid} is not running (no PID)",
+                title="Signal Failed",
+                severity="warning",
+            )
+            return
+
+
+        async def show_picker():
+            signal_num = await app.push_screen_wait(
+                SignalPickerScreen(uuid, f"{proc.command} {proc.arguments}", proc.pid)  # pyright: ignore[reportArgumentType]
+            )
+            if signal_num is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                await self._send_signal_to_selected(signal_num)
+
+        _ = app.run_worker(show_picker, exclusive=True)
+
 
     async def _build(self, uuids: list[str] | set[UUID] | None = None) -> None:
         async with self._update_lock:

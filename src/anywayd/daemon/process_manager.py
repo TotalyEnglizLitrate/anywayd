@@ -363,7 +363,8 @@ class ProcessManager:
                 (
                     await session.execute(
                         select(Process).where(
-                            (Process.uuid.in_(uuids)) & (Process.invoked_by_user == user)
+                            (Process.uuid.in_(uuids))
+                            & (Process.invoked_by_user == user)
                         )
                     )
                 )

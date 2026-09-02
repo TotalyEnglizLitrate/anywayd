@@ -1,21 +1,19 @@
-import asyncio
 import os
 
 from typing import Annotated, List, Optional, cast  # pyright: ignore[reportDeprecated]
 
 import typer
-from dbus_fast import Variant
 from rich.console import Console
 
-from anywayd.cli.tui import AnywaydApp
-from anywayd.cli.dbus_client import dbus_client
-from anywayd.daemon.service import OBJECT_PATH, SERVICE_NAME
+from anywayd.constants import OBJECT_PATH, SERVICE_NAME
 
 app = typer.Typer()
 console = Console()
 
 
 def _client():
+    from anywayd.cli.dbus_client import dbus_client
+
     return dbus_client(SERVICE_NAME, OBJECT_PATH, SERVICE_NAME)
 
 
@@ -40,6 +38,8 @@ async def _start_process(
     env: dict[str, str],
     inherit_env: bool,
 ) -> None:
+    from dbus_fast import Variant
+
     full_env = dict(os.environ) if inherit_env else {}
     full_env.update(env)
     env_arg = {k: Variant("s", v) for k, v in full_env.items()}
@@ -87,11 +87,15 @@ def main(
     ] = None,
 ):
     if command:
+        import asyncio
+
         wd = os.path.abspath(working_dir)
         if env is not None:
             assert isinstance(env, dict)
         asyncio.run(_start_process(command, wd, run_as, env or {}, inherit_env))
     else:
+        from anywayd.cli.tui import AnywaydApp
+
         AnywaydApp().run()
 
 

@@ -26,7 +26,7 @@ from textual.widgets.data_table import ColumnKey, RowDoesNotExist, RowKey
 
 from anywayd.cli.dbus_client import DBusClient, dbus_client
 from anywayd.daemon.models import Process
-from anywayd.daemon.service import OBJECT_PATH, SERVICE_NAME
+from anywayd.constants import OBJECT_PATH, SERVICE_NAME
 
 LOG_DIR_TEMPLATE = "/var/log/anywayd/{uuid}"
 

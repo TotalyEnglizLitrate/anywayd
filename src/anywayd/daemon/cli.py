@@ -7,10 +7,6 @@ from typing import Annotated
 
 import typer
 
-from rich.traceback import install
-
-from anywayd.daemon.service import service
-
 
 def _ensure_gil() -> None:
     if hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled():
@@ -27,6 +23,9 @@ app = typer.Typer()
 
 @app.command()
 def main(debug: Annotated[bool, typer.Option(help="Enable debug logging")] = False):
+    from rich.traceback import install
+    from anywayd.daemon.service import service
+
     _ = install(max_frames=3)
     _ensure_gil()
     _ensure_su()

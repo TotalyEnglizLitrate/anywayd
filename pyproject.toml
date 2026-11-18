@@ -1,7 +1,7 @@
 [project]
 name = "anywayd"
 version = "0.1.0"
-description = "Add your description here"
+description = "A simplistic background process manager for Linux"
 readme = "README.md"
 authors = [
     { name = "Narendra S", email = "narendra.s1232@gmail.com" }
